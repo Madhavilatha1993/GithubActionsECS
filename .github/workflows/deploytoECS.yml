@@ -1,0 +1,51 @@
+name: Deploy to ECS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install AWS CLI and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli jq
+
+      - name: Update ECS Service for WordPress
+        env:
+          ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME }}
+          ECS_SERVICE_NAME: ${{ secrets.ECS_WORDPRESS_SERVICE_NAME }}
+          ECS_TASK_DEFINITION: ${{ secrets.ECS_WORDPRESS_TASK_DEFINITION }}
+          WORDPRESS_IMAGE_URI: ${{ secrets.WORDPRESS_IMAGE_URI }}
+        run: |
+          echo "new branch"
+          echo "Fetching current task definition for WordPress..."
+          TASK_DEFINITION_JSON=$(aws ecs describe-task-definition --task-definition $ECS_TASK_DEFINITION)
+          echo "Current Task Definition: $TASK_DEFINITION_JSON"
+
+          echo "Updating container definitions with new WordPress image..."
+          UPDATED_CONTAINER_DEFINUTIONS=$(echo $TASK_DEFINITION_JSON | jq --arg WORDPRESS_IMAGE_URI "$WORDPRESS_IMAGE_URI" '.taskDefinition.containerDefinitions |= map(if .name == "webapp" then .image = $WORDPRESS_IMAGE_URI else . end)')
+          echo "Updated Container Definitions: $UPDATED_CONTAINER_DEFINUTIONS"
+
+          echo "Registering updated task definition for WordPress..."
+          UPDATED_TASK_DEFINITION=$(aws ecs register-task-definition --cli-input-json "$UPDATED_CONTAINER_DEFINUTIONS" | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "Updated Task Definition ARN: $UPDATED_TASK_DEFINITION"
+
+          echo "Updating ECS service for WordPress..."
+          aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --task-definition $ECS_TASK_DEFINITION
